@@ -1,7 +1,10 @@
 // Idea to replace find.
 "strict";
 
-var _ = require('lodash');
+var concat = require('lodash.concat');
+var isEmpty = require('lodash.isempty');
+var uniqBy = require('lodash.uniqby');
+
 var readInstalled = require('read-installed');
 var compareModuleNames = require('./lib/compare-module-names');
 var Module = require('./lib/module');
@@ -40,10 +43,10 @@ readInstalled('/Users/murrayl/projects/ohw-web-components/ohw-conditions-card', 
     var parents = currentDepth > 0 ? modules[currentDepth -1] : [data];
 
     parents.forEach(function(parent) {
-      if (parent && !_.isEmpty(parent._dependencies)) {
+      if (parent && !isEmpty(parent._dependencies)) {
         var explicitDependancies = Object.keys(parent._dependencies || {});
         var devDependencies = Object.keys(parent.devDependencies || {});
-        var dependencies = options.production ? _.concat([], explicitDependancies) : _.concat([], explicitDependancies, devDependencies);
+        var dependencies = options.production ? concat([], explicitDependancies) : concat([], explicitDependancies, devDependencies);
 
         var unflattenedDeps = dependencies.reduce(function(acc, dependency){
           var thisDependency = parent.dependencies[dependency];
@@ -53,22 +56,22 @@ readInstalled('/Users/murrayl/projects/ohw-web-components/ohw-conditions-card', 
           return acc;
         }, []);
 
-        modules[currentDepth] = _.concat(modules[currentDepth], unflattenedDeps);
+        modules[currentDepth] = concat(modules[currentDepth], unflattenedDeps);
       }
     });
     // options.prune?
     // huge optimization by pruning duplicates - by experimentation reduces traversal by an order of magnitude in our ~200MB repositories.
-    modules[currentDepth] = _.uniqBy(modules[currentDepth], 'name');
+    modules[currentDepth] = uniqBy(modules[currentDepth], 'name');
     currentDepth++;
   }
 
   // Reduce the collection from Array<Array<Module>> to Array<Module> - was a flattenDeep
   var flatResults = [];
   modules.forEach(function(moduleCollection) {
-    flatResults = _.concat(flatResults, moduleCollection);
+    flatResults = concat(flatResults, moduleCollection);
   });
   // TODO: should we log removed forks?
-  var uniqResults = _.uniqBy(flatResults, 'name');
+  var uniqResults = uniqBy(flatResults, 'name');
   // with flat results search for license files:
   console.log('============================ STATS ===========================');
   console.log('deep module count: ', flatResults.length);
@@ -321,7 +324,7 @@ function createId(moduleData) {
 
 // function otherTraversal(module) {
 //   var deps = [].concat(Object.keys(node._dependencies || {}));
-//   if (!_.isEmpty(deps)) {
+//   if (!isEmpty(deps)) {
 //     var unflattenedDeps = deps.reduce(function(acc, dep){
 //       acc[dep] = node.dependencies[dep];
 //       return acc;
@@ -339,7 +342,7 @@ function createId(moduleData) {
 //     acc[dep] = node.dependencies[dep];
 //     return acc;
 //   }, {})
-//   // var unflattenedDeps = _.pick(node.dependencies, deps);
+//   // var unflattenedDeps = pick(node.dependencies, deps);
 //   // Add those to the root object.
 //   Object.assign(node, { "dependencies": unflattenedDeps });
 //   // For each added node - get its deps & devDependencies and add it to its parent.
