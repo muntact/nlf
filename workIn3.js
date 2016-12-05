@@ -1,10 +1,14 @@
-// Idea to replace find.
+// TODO: mix this into the find function.
 "strict";
 
+var compact = require('lodash.compact');
 var concat = require('lodash.concat');
+var countBy = require('lodash.countby');
 var isEmpty = require('lodash.isempty');
+var transform = require('lodash.transform');
 var uniqBy = require('lodash.uniqby');
 
+// DEPS FROM NLF:
 var readInstalled = require('read-installed');
 var compareModuleNames = require('./lib/compare-module-names');
 var Module = require('./lib/module');
@@ -19,39 +23,52 @@ var LicenseCollection = require('./lib/license-collection');
 var licenseFind = require('./lib/license-find');
 
 var options = {};
-// TODO: deal with number = Infinity.
-options.depth = 20;
+options.depth = undefined;
+// caveat prune forks and production should be false at the same time...
 options.production = false;
-// dedupe options:
-// options.dedupe = {
-//   // dedupe module by repository?
-//   byRepository: true,
-// }
+options.pruneForks = false;
+options.log = true;
 
-// readInstalled(__dirname, function(err, data) {
-readInstalled('/Users/murrayl/projects/ohw-web-components/ohw-conditions-card', function(err, data) {
-  // make the array to hold module 'dirs'
-  var modules = Array(options.depth).fill([]);
+// readInstalled('/Users/murrayl/projects/ohw-web-components/ohw-conditions-card', function(err, data) {
+readInstalled(__dirname, function(err, data) {
   // initialize the depth.
   var currentDepth = 0;
+  // make the array to hold module 'dirs' - Array(undefined) defaults to a length 1 array.
+  var modules = Array(options.depth).fill([]);
+  var uniqueModules = {};
+
+  // Vars built from options:
+  var moduleId = options.pruneForks ? "name" : "_id";
+  var exhaustModules;
+  var relativeDepth;
   // need to use a relativeDepth to deal with level 0.
-  var relativeDepth = options.depth + 1;
+  if (options.depth !== undefined) {
+    exhaustModules = false;
+    relativeDepth = options.depth + 1;
+  } else {
+    exhaustModules = true;
+    relativeDepth = Number.MAX_SAFE_INTEGER;
+  }
 
   // generate the stratified array representation of the node_module tree.
-  while (currentDepth < options.depth) {
+  while ((currentDepth < relativeDepth) || exhaustModules) {
     // parent nodes, if this is loop 0 use the project root as the 'parent' as it is the top node_module in context.
     var parents = currentDepth > 0 ? modules[currentDepth -1] : [data];
 
     parents.forEach(function(parent) {
       if (parent && !isEmpty(parent._dependencies)) {
+        // use dependencies and devDependencies to traverse the tree as if it were deep.
         var explicitDependancies = Object.keys(parent._dependencies || {});
         var devDependencies = Object.keys(parent.devDependencies || {});
-        var dependencies = options.production ? concat([], explicitDependancies) : concat([], explicitDependancies, devDependencies);
+        var dependencies = !options.production ? concat([], explicitDependancies, devDependencies): concat([], explicitDependancies);
 
         var unflattenedDeps = dependencies.reduce(function(acc, dependency){
           var thisDependency = parent.dependencies[dependency];
-          if (thisDependency) {
+          // additional logic for prune forks here.
+          if (thisDependency && !uniqueModules.hasOwnProperty(thisDependency[moduleId])) {
             acc.push(thisDependency);
+            // append the data to the uniqueModules map... :/
+            uniqueModules[thisDependency[moduleId]] = true;
           }
           return acc;
         }, []);
@@ -59,9 +76,13 @@ readInstalled('/Users/murrayl/projects/ohw-web-components/ohw-conditions-card', 
         modules[currentDepth] = concat(modules[currentDepth], unflattenedDeps);
       }
     });
-    // options.prune?
-    // huge optimization by pruning duplicates - by experimentation reduces traversal by an order of magnitude in our ~200MB repositories.
-    modules[currentDepth] = uniqBy(modules[currentDepth], 'name');
+    modules[currentDepth] = compact(modules[currentDepth]);
+    modules[currentDepth] = uniqBy(modules[currentDepth], '_id');
+
+    console.log(currentDepth, modules[currentDepth].length);
+    if (modules[currentDepth].length === 0) {
+      break;
+    }
     currentDepth++;
   }
 
@@ -72,11 +93,32 @@ readInstalled('/Users/murrayl/projects/ohw-web-components/ohw-conditions-card', 
   });
   // TODO: should we log removed forks?
   var uniqResults = uniqBy(flatResults, 'name');
+
   // with flat results search for license files:
-  console.log('============================ STATS ===========================');
-  console.log('deep module count: ', flatResults.length);
-  console.log('unique module count: ', uniqResults.length);
-  console.log('==============================================================');
+  if (options.log) {
+    console.log('============================ STATS ===========================');
+    console.log('deep module count: ', flatResults.length);
+    console.log('unique module count: ', uniqResults.length);
+    // log forks.
+    if (!options.pruneForks) {
+      var forks = transform(countBy(flatResults, function(module) { return module.name }), function(result, count, value) {
+        if (count > 1) result.push(value);
+      }, []);
+
+      if (forks.length > 0 ) {
+        console.log('============================ FORKS ===========================');
+        forks.sort();
+        forks.map(function(moduleName) {
+          var theseForks = flatResults.filter(function(module) { return moduleName === module.name })
+            .map(function(module) { return module.version })
+            .sort();
+          console.log(moduleName + ': ', theseForks.join(', '));
+        });
+      }
+    }
+
+    console.log('==============================================================');
+  }
   var callback = function(err, data) {
     // console.log(data);
   };
@@ -102,6 +144,8 @@ readInstalled('/Users/murrayl/projects/ohw-web-components/ohw-conditions-card', 
   });
 
 });
+
+// THE FOLLOWING WAS ALREADY IN NLF:
 
 /**
  * Create a module object from a record in readInstalled
@@ -320,37 +364,35 @@ function createId(moduleData) {
 	return moduleData._id;
 }
 
+/**
+ * Is this module a development dependency of its parent?
+ *
+ * @param  {Object}  moduleData The module's data
+ * @return {Boolean}            True if the module is a production dependency
+ */
+function isDevDependency(moduleData) {
 
+	// this might be the root object - which by definition is production
+	if (moduleData.parent === undefined) {
+		return false;
+	}
 
-// function otherTraversal(module) {
-//   var deps = [].concat(Object.keys(node._dependencies || {}));
-//   if (!isEmpty(deps)) {
-//     var unflattenedDeps = deps.reduce(function(acc, dep){
-//       acc[dep] = node.dependencies[dep];
-//       return acc;
-//     }, {});
-//   }
-//
-// }
-//
-// function traverse(node) {
-//   // parent:
-//   // var root = {};
-//   // data.dependencies = node. // Picks = data._dependencies && data.devDependencies.
-//   var deps = [].concat(Object.keys(node._dependencies || {}));
-//   var unflattenedDeps = deps.reduce(function(acc, dep){
-//     acc[dep] = node.dependencies[dep];
-//     return acc;
-//   }, {})
-//   // var unflattenedDeps = pick(node.dependencies, deps);
-//   // Add those to the root object.
-//   Object.assign(node, { "dependencies": unflattenedDeps });
-//   // For each added node - get its deps & devDependencies and add it to its parent.
-//   Object.keys(unflattenedDeps).map(function(name) {
-//     var thisNode = unflattenedDeps[name];
-//     console.log(name);
-//     if (thisNode && thisNode._dependencies) {
-//       traverse(thisNode);
-//     }
-//   });
-// }
+	if (moduleData.extraneous) {
+		return true;
+	}
+
+	var dependencies = moduleData.parent.devDependencies || {},
+		dependencyName;
+
+	// look for this module in the production dependencies of the parent
+	// and return true if it is found
+	for (dependencyName in dependencies) {
+		if (dependencies.hasOwnProperty(dependencyName)) {
+			if (dependencyName === moduleData.name) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
