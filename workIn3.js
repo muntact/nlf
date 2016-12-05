@@ -15,50 +15,71 @@ var standardFormatter = require('./lib/formatters/standard');
 var LicenseCollection = require('./lib/license-collection');
 var licenseFind = require('./lib/license-find');
 
-readInstalled(__dirname, function(err, data) {
+var options = {};
+// TODO: deal with number = Infinity.
+options.depth = 20;
+options.production = false;
+// dedupe options:
+// options.dedupe = {
+//   // dedupe module by repository?
+//   byRepository: true,
+// }
+
+// readInstalled(__dirname, function(err, data) {
+readInstalled('/Users/murrayl/projects/ohw-web-components/ohw-conditions-card', function(err, data) {
   // make the array to hold module 'dirs'
-  var depth = 10; // make a yarg.
-  var modules = Array(depth).fill([]);
-  // push into 0 the required modules.
-  var deps = [].concat(Object.keys(data._dependencies || {}));
-  var unflattenedDeps = deps.reduce(function(acc, dep){
-    acc.push(data.dependencies[dep]);
-    return acc;
-  }, []);
-  modules[0] = unflattenedDeps;
-  var currentDepth = 1;
-  // start the loop
-  while (currentDepth < depth) {
-    var parents = modules[currentDepth -1];
+  var modules = Array(options.depth).fill([]);
+  // initialize the depth.
+  var currentDepth = 0;
+  // need to use a relativeDepth to deal with level 0.
+  var relativeDepth = options.depth + 1;
+
+  // generate the stratified array representation of the node_module tree.
+  while (currentDepth < options.depth) {
+    // parent nodes, if this is loop 0 use the project root as the 'parent' as it is the top node_module in context.
+    var parents = currentDepth > 0 ? modules[currentDepth -1] : [data];
+
     parents.forEach(function(parent) {
       if (parent && !_.isEmpty(parent._dependencies)) {
-        var deps = [].concat(Object.keys(parent._dependencies || {}));
-        var unflattenedDeps = deps.reduce(function(acc, dep){
-          acc.push(parent.dependencies[dep]);
+        var explicitDependancies = Object.keys(parent._dependencies || {});
+        var devDependencies = Object.keys(parent.devDependencies || {});
+        var dependencies = options.production ? _.concat([], explicitDependancies) : _.concat([], explicitDependancies, devDependencies);
+
+        var unflattenedDeps = dependencies.reduce(function(acc, dependency){
+          var thisDependency = parent.dependencies[dependency];
+          if (thisDependency) {
+            acc.push(thisDependency);
+          }
           return acc;
         }, []);
-        modules[currentDepth] = modules[currentDepth].concat(unflattenedDeps);
+
+        modules[currentDepth] = _.concat(modules[currentDepth], unflattenedDeps);
       }
     });
-    modules[currentDepth] = _.compact(modules[currentDepth]);
+    // options.prune?
+    // huge optimization by pruning duplicates - by experimentation reduces traversal by an order of magnitude in our ~200MB repositories.
     modules[currentDepth] = _.uniqBy(modules[currentDepth], 'name');
     currentDepth++;
   }
-  // Array of Array of modules by depth.
 
-  // Reduce the collection from Array<Array<Module>> to Array<Module>
-  var flatResults = _.flattenDeep(modules);
+  // Reduce the collection from Array<Array<Module>> to Array<Module> - was a flattenDeep
+  var flatResults = [];
+  modules.forEach(function(moduleCollection) {
+    flatResults = _.concat(flatResults, moduleCollection);
+  });
+  // TODO: should we log removed forks?
   var uniqResults = _.uniqBy(flatResults, 'name');
-  // with flat results search for license files... ?
-
-  console.log(uniqResults.length);
+  // with flat results search for license files:
+  console.log('============================ STATS ===========================');
+  console.log('deep module count: ', flatResults.length);
+  console.log('unique module count: ', uniqResults.length);
+  console.log('==============================================================');
   var callback = function(err, data) {
-    console.log(data)
+    // console.log(data);
   };
   var output = {};
   var count = 0;
   uniqResults.map(function(result) {
-    console.log('asd');
     // we're going to call the async function - so increase count
     count++;
     createModule(result, function (err, module) {
@@ -72,7 +93,6 @@ readInstalled(__dirname, function(err, data) {
 
       // if count falls to zero, we are finished
       if (count === 0) {
-        console.log('wat');
         callback(null, output);
       }
     });
