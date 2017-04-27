@@ -120,7 +120,7 @@ readInstalled(__dirname, function(err, data) {
     console.log('==============================================================');
   }
   var callback = function(err, data) {
-    // console.log(data);
+    console.log(data.name);
   };
   var output = {};
   var count = 0;
